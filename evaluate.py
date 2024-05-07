@@ -38,10 +38,11 @@ def main(
             instruction,
             input=None,
             temperature=0.1,
-            top_p=0.75,
+            top_p=0.95,
             top_k=40,
             num_beams=4,
             max_new_tokens=256,
+            do_sample=False,
             **kwargs,
     ):
         prompt = generate_prompt(instruction, input)
@@ -52,6 +53,7 @@ def main(
             top_p=top_p,
             top_k=top_k,
             num_beams=num_beams,
+            do_sample=do_sample,
             **kwargs,
         )
         with torch.no_grad():
@@ -84,10 +86,13 @@ def main(
         print("Response:", evaluate(instruction))
         print()
     """
-    save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
+    save_file = f'experiment/{args.base_model}-{args.dataset}.json'
     create_dir('experiment/')
 
     dataset = load_data(args)
+    if args.test_size:
+        dataset = dataset[:args.test_size]
+
     tokenizer, model = load_model(args)
     total = len(dataset)
     correct = 0
@@ -180,12 +185,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', choices=['AddSub', 'MultiArith', 'SingleEq', 'gsm8k', 'AQuA', 'SVAMP'],
                         required=True)
-    parser.add_argument('--model', choices=['LLaMA-7B', 'BLOOM-7B', 'GPT-j-6B'], required=True)
-    parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'Prefix'],
-                        required=True)
     parser.add_argument('--base_model', required=True)
-    parser.add_argument('--lora_weights', required=True)
+    parser.add_argument('--test_size', type=int, default=None)
     parser.add_argument('--load_8bit', action='store_true', default=False)
+    # parser.add_argument('--model', choices=['LLaMA-7B', 'BLOOM-7B', 'GPT-j-6B', 'GPT-2'], required=True)
+    # parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'Prefix', 'None'],
+    #                     required=True)
+    # parser.add_argument('--lora_weights', required=True)
 
     return parser.parse_args()
 
@@ -202,15 +208,19 @@ def load_model(args) -> tuple:
     base_model = args.base_model
     if not base_model:
         raise ValueError(f'can not find base model name by the value: {args.model}')
-    lora_weights = args.lora_weights
-    if not lora_weights:
-        raise ValueError(f'can not find lora weight, the value is: {lora_weights}')
+    # lora_weights = args.lora_weights
+    # if not lora_weights and args.adapter != 'None':
+    #     raise ValueError(f'can not find lora weight, the value is: {lora_weights}')
+    lora_weights = None
 
     load_8bit = args.load_8bit
-    if args.model == 'LLaMA-7B':
-        tokenizer = LlamaTokenizer.from_pretrained(base_model)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
+    # if args.model == 'LLaMA-7B':
+    #     tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    # else:
+    #     tokenizer = AutoTokenizer.from_pretrained(base_model)
+
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+
     if device == "cuda":
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
@@ -219,12 +229,13 @@ def load_model(args) -> tuple:
             device_map="auto",
             trust_remote_code=True,
         ) # fix zwq
-        model = PeftModel.from_pretrained(
-            model,
-            lora_weights,
-            torch_dtype=torch.float16,
-            device_map={"":0}
-        )
+        if lora_weights:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights,
+                torch_dtype=torch.float16,
+                device_map={"":0}
+            )
     elif device == "mps":
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
